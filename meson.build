@@ -442,14 +442,6 @@ endif
 # doing, made local changes to gcc's specs file that turned it into
 # a compiler command-line flag.
 #
-# What about linker flags?  For a static build, no PIE is implied by -static
-# which we added above (and if it's not because of the same specs patching,
-# there's nothing we can do: compilation will fail, report a bug to your
-# distro and do not use --disable-pie in the meanwhile).  For dynamic linking,
-# instead, we can't add -no-pie because it overrides -shared: the linker then
-# tries to build an executable instead of a shared library and fails.  So
-# don't add -no-pie anywhere and cross fingers. :(
-#
 # Emscripten doesn't support -no-pie but meson can't catch the compiler
 # warning. So explicitly omit the flag for Emscripten.
 if not get_option('b_pie') and host_os != 'emscripten'
@@ -1108,49 +1100,12 @@ meson.override_dependency('glib-2.0', glib)
 add_project_dependencies(glib.partial_dependency(compile_args: true, includes: true),
                          native: false, language: all_languages)
 
-gio = not_found
-gdbus_codegen = not_found
-gdbus_codegen_error = '@0@ requires gdbus-codegen, please install libgio'
-if not get_option('gio').auto() or have_system
-  gio = dependency('gio-2.0', required: get_option('gio'),
-                   method: 'pkg-config')
-  if gio.found() and not cc.links('''
-    #include <gio/gio.h>
-    int main(void)
-    {
-      g_dbus_proxy_new_sync(0, 0, 0, 0, 0, 0, 0, 0);
-      return 0;
-    }''', dependencies: [glib, gio])
-    if get_option('gio').enabled()
-      error('The installed libgio is broken for static linking')
-    endif
-    gio = not_found
-  endif
-  if gio.found()
-    gdbus_codegen = find_program('gdbus-codegen',
-                                 required: get_option('gio'))
-    gio_unix = dependency('gio-unix-2.0', required: get_option('gio'),
-                          method: 'pkg-config')
-    gio = declare_dependency(dependencies: [gio, gio_unix],
-                             version: gio.version())
-  endif
-endif
-if gdbus_codegen.found() and get_option('cfi')
-  gdbus_codegen = not_found
-  gdbus_codegen_error = '@0@ uses gdbus-codegen, which does not support control flow integrity'
-endif
-
 xml_pp = find_program('scripts/xml-preprocess.py')
 
 lttng = not_found
 if 'ust' in get_option('trace_backends')
   lttng = dependency('lttng-ust', required: true, version: '>= 2.1',
                      method: 'pkg-config')
-endif
-pixman = not_found
-if not get_option('pixman').auto() or have_system or have_tools
-  pixman = dependency('pixman-1', required: get_option('pixman'), version:'>=0.21.8',
-                      method: 'pkg-config')
 endif
 
 zlib = dependency('zlib', required: true)
@@ -1216,10 +1171,6 @@ if get_option('attr').allowed()
   endif
 endif
 
-cocoa = dependency('appleframeworks',
-                   modules: ['Cocoa', 'CoreVideo', 'QuartzCore'],
-                   required: get_option('cocoa'))
-
 vmnet = dependency('appleframeworks', modules: 'vmnet', required: get_option('vmnet'))
 if vmnet.found() and not cc.has_header_symbol('vmnet/vmnet.h',
                                               'VMNET_BRIDGED_MODE',
@@ -1265,13 +1216,6 @@ if libcap_ng.found() and not cc.links('''
   endif
 endif
 
-if get_option('xkbcommon').auto() and not have_system and not have_tools
-  xkbcommon = not_found
-else
-  xkbcommon = dependency('xkbcommon', required: get_option('xkbcommon'),
-                         method: 'pkg-config')
-endif
-
 slirp = not_found
 if not get_option('slirp').auto() or have_system
   slirp = dependency('slirp', required: get_option('slirp'),
@@ -1294,7 +1238,6 @@ endif
 
 enable_passt = get_option('passt') \
   .require(host_os == 'linux', error_message: 'passt is supported only on Linux') \
-  .require(gio.found(), error_message: 'passt requires gio') \
   .allowed()
 
 vde = not_found
@@ -1346,24 +1289,6 @@ if not get_option('sndio').auto() or have_system
                     method: 'pkg-config')
 endif
 
-spice_protocol = not_found
-if not get_option('spice_protocol').auto() or have_system
-  spice_protocol = dependency('spice-protocol', version: '>=0.14.3',
-                              required: get_option('spice_protocol'),
-                              method: 'pkg-config')
-endif
-spice = not_found
-if get_option('spice') \
-             .disable_auto_if(not have_system) \
-             .require(pixman.found(),
-                      error_message: 'cannot enable SPICE if pixman is not available') \
-             .allowed()
-  spice = dependency('spice-server', version: '>=0.15.0',
-                     required: get_option('spice'),
-                     method: 'pkg-config')
-endif
-spice_headers = spice.partial_dependency(compile_args: true, includes: true)
-
 rt = not_found
 if host_os != 'windows'
   have_shm_open = cc.has_function('shm_open')
@@ -1411,15 +1336,8 @@ if not get_option('qatzip').auto() or have_system
 endif
 
 virgl = not_found
-
-have_vhost_user_gpu = have_tools and host_os == 'linux' and pixman.found()
-if not get_option('virglrenderer').auto() or have_system or have_vhost_user_gpu
-  virgl = dependency('virglrenderer',
-                     method: 'pkg-config',
-                     required: get_option('virglrenderer'))
-endif
 rutabaga = not_found
-if not get_option('rutabaga_gfx').auto() or have_system or have_vhost_user_gpu
+if not get_option('rutabaga_gfx').auto() or have_system
   rutabaga = dependency('rutabaga_gfx_ffi',
                          method: 'pkg-config',
                          required: get_option('rutabaga_gfx'))
@@ -1503,97 +1421,6 @@ if host_os == 'linux' and have_tools and get_option('mpath').allowed()
 endif
 
 iconv = not_found
-curses = not_found
-if have_system and get_option('curses').allowed()
-  curses_test = '''
-    #ifdef __APPLE__
-    #define _XOPEN_SOURCE_EXTENDED 1
-    #endif
-    #include <locale.h>
-    #include <curses.h>
-    #include <wchar.h>
-    int main(void) {
-      wchar_t wch = L'w';
-      setlocale(LC_ALL, "");
-      resize_term(0, 0);
-      addwstr(L"wide chars\n");
-      addnwstr(&wch, 1);
-      add_wch(WACS_DEGREE);
-      return 0;
-    }'''
-
-  curses_dep_list = host_os == 'windows' ? ['ncurses', 'ncursesw'] : ['ncursesw']
-  curses = dependency(curses_dep_list,
-                      required: false,
-                      method: 'pkg-config')
-  msg = get_option('curses').enabled() ? 'curses library not found' : ''
-  curses_compile_args = ['-DNCURSES_WIDECHAR=1']
-  if curses.found()
-    if cc.links(curses_test, args: curses_compile_args, dependencies: [curses])
-      curses = declare_dependency(compile_args: curses_compile_args, dependencies: [curses],
-                                  version: curses.version())
-    else
-      msg = 'curses package not usable'
-      curses = not_found
-    endif
-  endif
-  if not curses.found()
-    has_curses_h = cc.has_header('curses.h', args: curses_compile_args)
-    if host_os != 'windows' and not has_curses_h
-      message('Trying with /usr/include/ncursesw')
-      curses_compile_args += ['-I/usr/include/ncursesw']
-      has_curses_h = cc.has_header('curses.h', args: curses_compile_args)
-    endif
-    if has_curses_h
-      curses_libname_list = (host_os == 'windows' ? ['pdcurses'] : ['ncursesw', 'cursesw'])
-      foreach curses_libname : curses_libname_list
-        libcurses = cc.find_library(curses_libname,
-                                    required: false)
-        if libcurses.found()
-          if cc.links(curses_test, args: curses_compile_args, dependencies: libcurses)
-            curses = declare_dependency(compile_args: curses_compile_args,
-                                        dependencies: [libcurses])
-            break
-          else
-            msg = 'curses library not usable'
-          endif
-        endif
-      endforeach
-    endif
-  endif
-  if get_option('iconv').allowed()
-    foreach link_args : [ ['-liconv'], [] ]
-      # Programs will be linked with glib and this will bring in libiconv on FreeBSD.
-      # We need to use libiconv if available because mixing libiconv's headers with
-      # the system libc does not work.
-      # However, without adding glib to the dependencies -L/usr/local/lib will not be
-      # included in the command line and libiconv will not be found.
-      if cc.links('''
-        #include <iconv.h>
-        int main(void) {
-          iconv_t conv = iconv_open("WCHAR_T", "UCS-2");
-          return conv != (iconv_t) -1;
-        }''', args: link_args, dependencies: glib)
-        iconv = declare_dependency(link_args: link_args, dependencies: glib)
-        break
-      endif
-    endforeach
-  endif
-  if curses.found() and not iconv.found()
-    if get_option('iconv').enabled()
-      error('iconv not available')
-    endif
-    msg = 'iconv required for curses UI but not available'
-    curses = not_found
-  endif
-  if not curses.found() and msg != ''
-    if get_option('curses').enabled()
-      error(msg)
-    else
-      warning(msg + ', disabling')
-    endif
-  endif
-endif
 
 brlapi = not_found
 if not get_option('brlapi').auto() or have_system
@@ -1612,32 +1439,6 @@ if not get_option('brlapi').auto() or have_system
       warning('could not link brlapi, disabling')
     endif
   endif
-endif
-
-sdl = not_found
-if not get_option('sdl').auto() or have_system
-  sdl = dependency('sdl2', required: get_option('sdl'))
-  sdl_image = not_found
-endif
-if sdl.found()
-  # Some versions of SDL have problems with -Wundef
-  if not cc.compiles('''
-                     #include <SDL.h>
-                     #include <SDL_syswm.h>
-                     int main(int argc, char *argv[]) { return 0; }
-                     ''', dependencies: sdl, args: '-Werror=undef')
-    sdl = declare_dependency(compile_args: '-Wno-undef',
-                             dependencies: sdl,
-                             version: sdl.version())
-  endif
-  sdl_image = dependency('SDL2_image', required: get_option('sdl_image'),
-                         method: 'pkg-config')
-else
-  if get_option('sdl_image').enabled()
-    error('sdl-image required, but SDL was @0@'.format(
-          get_option('sdl').disabled() ? 'disabled' : 'not found'))
-  endif
-  sdl_image = not_found
 endif
 
 rbd = not_found
@@ -1763,22 +1564,6 @@ if not get_option('coreaudio').auto() or (host_os == 'darwin' and have_system)
   coreaudio = dependency('appleframeworks', modules: 'CoreAudio',
                          required: get_option('coreaudio'))
 endif
-
-opengl = not_found
-if not get_option('opengl').auto() or have_system or have_vhost_user_gpu
-  epoxy = dependency('epoxy', method: 'pkg-config',
-                      required: get_option('opengl'))
-  if cc.has_header('epoxy/egl.h', dependencies: epoxy)
-    opengl = epoxy
-  elif get_option('opengl').enabled()
-    error('epoxy/egl.h not found')
-  endif
-endif
-gbm = not_found
-if (have_system or have_tools) and (virgl.found() or opengl.found())
-  gbm = dependency('gbm', method: 'pkg-config', required: false)
-endif
-have_vhost_user_gpu = have_vhost_user_gpu and virgl.found() and opengl.found() and gbm.found()
 
 libcbor = not_found
 if not get_option('libcbor').auto() or have_system
@@ -1908,59 +1693,13 @@ if nettle.found() and gmp.found()
                        required: get_option('nettle'))
 endif
 
-
-gtk = not_found
-gtkx11 = not_found
-vte = not_found
-
-if get_option('gtk') \
-             .disable_auto_if(not have_system) \
-             .require(pixman.found(),
-                      error_message: 'cannot enable GTK if pixman is not available') \
-             .allowed()
-  gtk = dependency('gtk+-3.0', version: '>=3.22.0',
-                   method: 'pkg-config',
-                   required: get_option('gtk'))
-  if gtk.found()
-    gtkx11 = dependency('gtk+-x11-3.0', version: '>=3.22.0',
-                        method: 'pkg-config',
-                        required: false)
-    gtk = declare_dependency(dependencies: [gtk, gtkx11],
-                             version: gtk.version())
-
-    if not get_option('vte').auto() or have_system
-      vte = dependency('vte-2.91',
-                       method: 'pkg-config',
-                       required: get_option('vte'))
-    endif
-  endif
-endif
-
-x11 = dependency('x11', method: 'pkg-config', required: gtkx11.found())
-
 png = not_found
 if get_option('png').allowed() and have_system
    png = dependency('libpng', version: '>=1.6.34', required: get_option('png'),
                     method: 'pkg-config')
 endif
-vnc = not_found
 jpeg = not_found
 sasl = not_found
-if get_option('vnc') \
-             .disable_auto_if(not have_system) \
-             .require(pixman.found(),
-                      error_message: 'cannot enable VNC if pixman is not available') \
-             .allowed()
-  vnc = declare_dependency() # dummy dependency
-  jpeg = dependency('libjpeg', required: get_option('vnc_jpeg'),
-                    method: 'pkg-config')
-  sasl = cc.find_library('sasl2', has_headers: ['sasl/sasl.h'],
-                         required: get_option('vnc_sasl'))
-  if sasl.found()
-    sasl = declare_dependency(dependencies: sasl,
-                              compile_args: '-DSTRUCT_IOVEC_DEFINED')
-  endif
-endif
 
 pam = not_found
 if not get_option('auth_pam').auto() or have_system
@@ -2269,32 +2008,6 @@ config_host_data = configuration_data()
 config_host_data.set('CONFIG_HAVE_RUST', have_rust)
 audio_drivers_selected = []
 if have_system
-  audio_drivers_available = {
-    'alsa': alsa.found(),
-    'coreaudio': coreaudio.found(),
-    'dsound': dsound.found(),
-    'jack': jack.found(),
-    'oss': oss.found(),
-    'pa': pulse.found(),
-    'pipewire': pipewire.found(),
-    'sdl': sdl.found(),
-    'sndio': sndio.found(),
-  }
-  foreach k, v: audio_drivers_available
-    config_host_data.set('CONFIG_AUDIO_' + k.to_upper(), v)
-  endforeach
-
-  # Default to native drivers first, OSS second, SDL third
-  audio_drivers_priority = \
-    [ 'pa', 'coreaudio', 'dsound', 'sndio', 'oss' ] + \
-    (host_os == 'linux' ? [] : [ 'sdl' ])
-  audio_drivers_default = []
-  foreach k: audio_drivers_priority
-    if audio_drivers_available[k]
-      audio_drivers_default += k
-    endif
-  endforeach
-
   foreach k: get_option('audio_drv_list')
     if k == 'default'
       audio_drivers_selected += audio_drivers_default
@@ -2312,22 +2025,7 @@ have_host_block_device = (host_os != 'darwin' or
     cc.has_header('IOKit/storage/IOMedia.h'))
 
 dbus_display = get_option('dbus_display') \
-  .require(gio.version().version_compare('>=2.64'),
-           error_message: '-display dbus requires glib>=2.64') \
-  .require(gdbus_codegen.found(),
-           error_message: gdbus_codegen_error.format('-display dbus')) \
-  .allowed()
-
-have_qemu_vnc = get_option('qemu_vnc') \
-  .require(have_tools,
-           error_message: 'qemu-vnc requires tools support') \
-  .require(dbus_display,
-           error_message: 'qemu-vnc requires dbus-display support') \
-  .require(vnc.found(),
-           error_message: 'qemu-vnc requires vnc support') \
-  .require(host_os != 'windows',
-           error_message: 'qemu-vnc is not currently supported on Windows') \
-  .allowed()
+    .allowed()
 
 have_virtfs = get_option('virtfs') \
     .require(host_os == 'linux' or host_os == 'darwin' or host_os == 'freebsd',
@@ -2430,7 +2128,6 @@ config_host_data.set('CONFIG_BRLAPI', brlapi.found())
 config_host_data.set('CONFIG_BSD', host_os in bsd_oses)
 config_host_data.set('CONFIG_FREEBSD', host_os == 'freebsd')
 config_host_data.set('CONFIG_CAPSTONE', capstone.found())
-config_host_data.set('CONFIG_COCOA', cocoa.found())
 config_host_data.set('CONFIG_DARWIN', host_os == 'darwin')
 config_host_data.set('CONFIG_FDT', fdt.found())
 config_host_data.set('CONFIG_FUZZ', get_option('fuzzing'))
@@ -2449,11 +2146,6 @@ if blkio.found()
                        blkio.version().version_compare('>=1.4.0'))
 endif
 config_host_data.set('CONFIG_CURL', curl.found())
-config_host_data.set('CONFIG_CURSES', curses.found())
-config_host_data.set('CONFIG_GBM', gbm.found())
-config_host_data.set('CONFIG_GIO', gio.found())
-config_host_data.set('CONFIG_GTK', gtk.found())
-config_host_data.set('CONFIG_VTE', vte.found())
 config_host_data.set('CONFIG_HEXAGON_IDEF_PARSER', get_option('hexagon_idef_parser'))
 config_host_data.set('CONFIG_LIBATTR', have_old_libattr)
 config_host_data.set('CONFIG_LIBCAP_NG', libcap_ng.found())
@@ -2473,19 +2165,15 @@ if numa.found()
                        cc.has_function('numa_has_preferred_many',
                                        dependencies: numa))
 endif
-config_host_data.set('CONFIG_OPENGL', opengl.found())
 config_host_data.set('CONFIG_PLUGIN', get_option('plugins'))
 config_host_data.set('CONFIG_RBD', rbd.found())
 config_host_data.set('CONFIG_RDMA', rdma.found())
 config_host_data.set('CONFIG_RELOCATABLE', get_option('relocatable'))
 config_host_data.set('CONFIG_SAFESTACK', get_option('safe_stack'))
-config_host_data.set('CONFIG_SDL', sdl.found())
-config_host_data.set('CONFIG_SDL_IMAGE', sdl_image.found())
 config_host_data.set('CONFIG_SECCOMP', seccomp.found())
 if seccomp.found()
   config_host_data.set('CONFIG_SECCOMP_SYSRAWRC', seccomp_has_sysrawrc)
 endif
-config_host_data.set('CONFIG_PIXMAN', pixman.found())
 config_host_data.set('CONFIG_PASST', enable_passt)
 config_host_data.set('CONFIG_SLIRP', slirp.found())
 config_host_data.set('CONFIG_SNAPPY', snappy.found())
@@ -2510,17 +2198,12 @@ config_host_data.set('CONFIG_VMNET', vmnet.found())
 config_host_data.set('CONFIG_VHOST_USER_BLK_SERVER', have_vhost_user_blk_server)
 config_host_data.set('CONFIG_VDUSE_BLK_EXPORT', have_vduse_blk_export)
 config_host_data.set('CONFIG_PNG', png.found())
-config_host_data.set('CONFIG_VNC', vnc.found())
-config_host_data.set('CONFIG_VNC_JPEG', jpeg.found())
-config_host_data.set('CONFIG_VNC_SASL', sasl.found())
 if virgl.found()
   config_host_data.set('VIRGL_VERSION_MAJOR', virgl.version().split('.')[0])
   config_host_data.set('VIRGL_VERSION_MINOR', virgl.version().split('.')[1])
   config_host_data.set('VIRGL_VERSION_MICRO', virgl.version().split('.')[2])
 endif
 config_host_data.set('CONFIG_VIRTFS', have_virtfs)
-config_host_data.set('CONFIG_VTE', vte.found())
-config_host_data.set('CONFIG_XKBCOMMON', xkbcommon.found())
 config_host_data.set('CONFIG_KEYUTILS', keyutils.found())
 config_host_data.set('CONFIG_GETTID', has_gettid)
 config_host_data.set('CONFIG_GNUTLS', gnutls.found())
@@ -2539,14 +2222,6 @@ config_host_data.set('CONFIG_UADK', uadk.found())
 config_host_data.set('CONFIG_QATZIP', qatzip.found())
 config_host_data.set('CONFIG_FUSE', fuse.found())
 config_host_data.set('CONFIG_FUSE_LSEEK', fuse_lseek.found())
-config_host_data.set('CONFIG_SPICE_PROTOCOL', spice_protocol.found())
-if spice_protocol.found()
-config_host_data.set('CONFIG_SPICE_PROTOCOL_MAJOR', spice_protocol.version().split('.')[0])
-config_host_data.set('CONFIG_SPICE_PROTOCOL_MINOR', spice_protocol.version().split('.')[1])
-config_host_data.set('CONFIG_SPICE_PROTOCOL_MICRO', spice_protocol.version().split('.')[2])
-endif
-config_host_data.set('CONFIG_SPICE', spice.found())
-config_host_data.set('CONFIG_X11', x11.found())
 config_host_data.set('CONFIG_DBUS_DISPLAY', dbus_display)
 config_host_data.set('CONFIG_CFI', get_option('cfi'))
 config_host_data.set('CONFIG_SELINUX', selinux.found())
@@ -3178,11 +2853,6 @@ if host_os == 'windows'
     }''', name: '_lock_file and _unlock_file'))
 endif
 
-if spice.found()
-  config_host_data.set('HAVE_SPICE_QXL_GL_SCANOUT2',
-    cc.has_function('spice_qxl_gl_scanout2', dependencies: spice))
-endif
-
 if host_os == 'windows'
   mingw_has_setjmp_longjmp = cc.links('''
     #include <setjmp.h>
@@ -3256,13 +2926,9 @@ have_ivshmem = config_host_data.get('CONFIG_EVENTFD')
 host_kconfig = \
   (get_option('fuzzing') ? ['CONFIG_FUZZ=y'] : []) + \
   (have_tpm ? ['CONFIG_TPM=y'] : []) + \
-  (pixman.found() ? ['CONFIG_PIXMAN=y'] : []) + \
-  (spice.found() ? ['CONFIG_SPICE=y'] : []) + \
   (have_ivshmem ? ['CONFIG_IVSHMEM=y'] : []) + \
-  (opengl.found() ? ['CONFIG_OPENGL=y'] : []) + \
   (libcbor.found() ? ['CONFIG_LIBCBOR=y'] : []) + \
   (gnutls.found() ? ['CONFIG_GNUTLS=y'] : []) + \
-  (x11.found() ? ['CONFIG_X11=y'] : []) + \
   (fdt.found() ? ['CONFIG_FDT=y'] : []) + \
   (have_vhost_user ? ['CONFIG_VHOST_USER=y'] : []) + \
   (have_vhost_vdpa ? ['CONFIG_VHOST_VDPA=y'] : []) + \
@@ -3574,7 +3240,6 @@ trace_events_subdirs = [
   'monitor',
   'util',
   'gdbstub',
-  'tools/qemu-vnc',
 ]
 if have_linux_user
   trace_events_subdirs += [ 'linux-user' ]
@@ -3663,7 +3328,6 @@ if have_system
     'net',
     'replay',
     'system',
-    'ui',
     'hw/remote',
   ]
 endif
@@ -3736,7 +3400,6 @@ subdir('util')
 subdir('qom')
 subdir('authz')
 subdir('crypto')
-subdir('ui')
 subdir('semihosting')
 subdir('audio')
 subdir('io')
@@ -3790,7 +3453,7 @@ util_ss = util_ss.apply({})
 libqemuutil = static_library('qemuutil',
                              build_by_default: false,
                              sources: util_ss.sources() + stub_ss.sources() + genh,
-                             dependencies: [util_ss.dependencies(), libm, threads, glib, socket, malloc, rt, pixman, opengl])
+                             dependencies: [util_ss.dependencies(), libm, threads, glib, socket, malloc, rt])
 qemuutil = declare_dependency(link_with: libqemuutil,
                               sources: genh + version_res,
                               dependencies: [event_loop_base])
@@ -4391,7 +4054,6 @@ foreach target : target_dirs
 
   # allow using headers from the dependencies but do not include the sources,
   # because this emulator only needs those in "objects".  For external
-  # dependencies, the full dependency is included below in the executable.
   lib_deps = []
   foreach dep : arch_deps
     lib_deps += dep.partial_dependency(compile_args: true, includes: true)
@@ -4405,52 +4067,29 @@ foreach target : target_dirs
                  c_args: c_args,
                  build_by_default: false)
 
-  if target.endswith('-softmmu')
-    execs = [{
-      'name': 'qemu-system-' + target_name,
-      'win_subsystem': 'console',
-      'sources': [main_rs, files('system/main.c')],
-      'dependencies': [sdl, target_stubs],
-    }]
-    if host_os == 'windows' and (sdl.found() or gtk.found())
-      execs += [{
-        'name': 'qemu-system-' + target_name + 'w',
-        'win_subsystem': 'windows',
-        'sources': [main_rs, files('system/main.c')],
-        'dependencies': [sdl, target_stubs],
-      }]
-    endif
-    if get_option('fuzzing')
-      specific_fuzz = specific_fuzz_ss.apply(config_target, strict: false)
-      execs += [{
-        'name': 'qemu-fuzz-' + target_name,
-        'win_subsystem': 'console',
-        'sources': [main_rs, specific_fuzz.sources()],
-        'dependencies': specific_fuzz.dependencies(),
-      }]
-    endif
-  else
-    execs = [{
-      'name': 'qemu-' + target_name,
-      'win_subsystem': 'console',
-      'sources': [],
-      'dependencies': [target_stubs]
-    }]
-  endif
+  
+  execs = [{
+    'name': 'qemu-' + target_name,
+    'win_subsystem': 'console',
+    'sources': [],
+    'dependencies': [target_stubs],
+    'is_library': true
+  }]
   foreach exe: execs
     exe_name = exe['name']
     if host_os == 'darwin'
       exe_name += '-unsigned'
     endif
 
-    emulator = executable(exe_name, exe['sources'],
+    emulator = shared_library(exe_name,
+               exe['sources'],
                install: true,
-               c_args: c_args,
+                c_args: c_args,
                dependencies: arch_deps + exe['dependencies'],
                objects: lib.extract_all_objects(recursive: true),
                link_depends: [block_syms, qemu_syms],
                link_args: link_args,
-               win_subsystem: exe['win_subsystem'])
+               soversion: '1')
 
     if host_os == 'darwin'
       icon = 'pc-bios/qemu.rsrc'
@@ -4500,27 +4139,8 @@ endif
 
 subdir('qga')
 
-# Don't build qemu-keymap if xkbcommon is not explicitly enabled
-# when we don't build tools or system
-if xkbcommon.found()
-  # used for the update-keymaps target, so include rules even if !have_tools
-  qemu_keymap = executable('qemu-keymap', files('qemu-keymap.c', 'ui/input-keymap.c') + genh,
-                           dependencies: [qemuutil, xkbcommon], install: have_tools)
-endif
-
 if have_tools
   tools_link_args = enable_modules ? ['@block.syms'] : []
-  qemu_img = executable('qemu-img', [files('qemu-img.c'), hxdep],
-             link_args: tools_link_args, link_depends: block_syms,
-             dependencies: [authz, block, crypto, io, qom, qemuutil], install: true)
-  qemu_io = executable('qemu-io', files('qemu-io.c'),
-             link_args: tools_link_args, link_depends: block_syms,
-             dependencies: [block, qemuutil], install: true)
-  qemu_nbd = executable('qemu-nbd', files('qemu-nbd.c'),
-               link_args: tools_link_args, link_depends: block_syms,
-               dependencies: [blockdev, qemuutil, selinux],
-               install: true)
-
   subdir('storage-daemon')
 
   foreach exe: [ 'qemu-img', 'qemu-io', 'qemu-nbd', 'qemu-storage-daemon']
@@ -4532,10 +4152,6 @@ if have_tools
 
   subdir('contrib/elf2dmp')
 
-  executable('qemu-edid', files('qemu-edid.c', 'hw/display/edid-generate.c'),
-             dependencies: [qemuutil, rt],
-             install: true)
-
   if have_vhost_user
     subdir('contrib/vhost-user-blk')
     subdir('contrib/vhost-user-bridge')
@@ -4544,32 +4160,9 @@ if have_tools
     subdir('contrib/vhost-user-scsi')
   endif
 
-  if host_os == 'linux'
-    executable('qemu-bridge-helper', files('qemu-bridge-helper.c'),
-               dependencies: [qemuutil, libcap_ng],
-               install: true,
-               install_dir: get_option('libexecdir'))
-
-    executable('qemu-pr-helper', files('scsi/qemu-pr-helper.c', 'scsi/utils.c'),
-               dependencies: [authz, crypto, io, qom, qemuutil,
-                              libcap_ng, mpathpersist],
-               install: true)
-
-    if cpu == 'x86_64'
-      executable('qemu-vmsr-helper', files('tools/i386/qemu-vmsr-helper.c'),
-               dependencies: [authz, crypto, io, qom, qemuutil,
-                              libcap_ng, mpathpersist],
-               install: true)
-    endif
-  endif
-
   if have_ivshmem
     subdir('contrib/ivshmem-client')
     subdir('contrib/ivshmem-server')
-  endif
-
-  if have_qemu_vnc
-    subdir('tools/qemu-vnc')
   endif
 endif
 
@@ -4609,9 +4202,6 @@ subdir('pyvenv')
 if host_os != 'emscripten'
   subdir('tests')
 endif
-if gtk.found()
-  subdir('po')
-endif
 
 if host_machine.system() == 'windows'
   nsis_cmd = [
@@ -4626,9 +4216,6 @@ if host_machine.system() == 'windows'
   ]
   if build_docs
     nsis_cmd += '-DCONFIG_DOCUMENTATION=y'
-  endif
-  if gtk.found()
-    nsis_cmd += '-DCONFIG_GTK=y'
   endif
 
   nsis = custom_target('nsis',
@@ -4892,27 +4479,8 @@ summary(summary_info, bool_yn: true, section: 'Crypto')
 
 # UI
 summary_info = {}
-if host_os == 'darwin'
-  summary_info += {'Cocoa support':           cocoa}
-endif
 summary_info += {'D-Bus display':     dbus_display}
-summary_info += {'SDL support':       sdl}
-summary_info += {'SDL image support': sdl_image}
-summary_info += {'GTK support':       gtk}
-summary_info += {'pixman':            pixman}
-summary_info += {'VTE support':       vte}
 summary_info += {'PNG support':       png}
-summary_info += {'VNC support':       vnc}
-if vnc.found()
-  summary_info += {'VNC SASL support':  sasl}
-  summary_info += {'VNC JPEG support':  jpeg}
-endif
-summary_info += {'VNC D-Bus server (qemu-vnc)': have_qemu_vnc}
-summary_info += {'spice protocol support': spice_protocol}
-if spice_protocol.found()
-  summary_info += {'  spice server support': spice}
-endif
-summary_info += {'curses support':    curses}
 summary_info += {'brlapi support':    brlapi}
 summary(summary_info, bool_yn: true, section: 'User interface')
 
@@ -4973,8 +4541,6 @@ summary_info += {'smartcard support': cacard}
 summary_info += {'U2F support':       u2f}
 summary_info += {'libusb':            libusb}
 summary_info += {'usb net redir':     usbredir}
-summary_info += {'OpenGL support (epoxy)': opengl}
-summary_info += {'GBM':               gbm}
 summary_info += {'libiscsi support':  libiscsi}
 summary_info += {'libnfs support':    libnfs}
 if host_os == 'windows'

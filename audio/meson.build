@@ -18,11 +18,9 @@ foreach m : [
   ['dsound', dsound, files('dsoundaudio.c', 'audio_win_int.c')],
   ['oss', oss, files('ossaudio.c')],
   ['pa', pulse, files('paaudio.c')],
-  ['sdl', sdl, files('sdlaudio.c')],
   ['jack', jack, files('jackaudio.c')],
   ['sndio', sndio, files('sndioaudio.c')],
   ['pipewire', pipewire, files('pwaudio.c')],
-  ['spice', spice, files('spiceaudio.c')]
 ]
   if m[1].found()
     module_ss = ss.source_set()
@@ -33,8 +31,7 @@ endforeach
 
 if dbus_display
     module_ss = ss.source_set()
-    module_ss.add(when: [gio, pixman],
-                  if_true: [dbus_display1_h, files('dbusaudio.c')])
+    module_ss.add(files('dbusaudio.c'))
     audio_modules += {'dbus': module_ss}
 endif
 
